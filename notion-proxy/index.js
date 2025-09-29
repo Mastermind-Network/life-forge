@@ -24,7 +24,7 @@ const notion = new Client({
 
 // Property names in your DB (MUST MATCH EXACTLY; case-sensitive)
 const DATE_PROP = 'Date & Time';     //Date property
-const LENGTH_PROP = 'Time Estimate'; //Number (assumed HOURS → minutes)
+const LENGTH_PROP = 'Time Estimate'; //Number
 
 // APP, LOGGING, HELPERS
 const app = express();
@@ -56,6 +56,17 @@ const getDates = (page) => {
 
 // Detect all-day dates (YYYY-MM-DD)
 const isDateOnly = (iso) => typeof iso === 'string' && iso.length === 10;
+
+function parseDurationLabelToMinutes(label) {
+  if (!label || typeof label !== "string") return null;
+  const txt = label.replace(/[^\dhm\s]/gi, "").toLowerCase(); // strip emoji/other symbols
+  const h = (txt.match(/(\d+)\s*h/) || [])[1];
+  const m = (txt.match(/(\d+)\s*m/) || [])[1];
+  const hours = h ? parseInt(h, 10) : 0;
+  const mins  = m ? parseInt(m, 10) : 0;
+  const total = hours * 60 + mins;
+  return total > 0 ? total : null;
+}
 
 // HEALTH & DEBUG
 app.get('/health', (_req, res) => {
@@ -188,13 +199,24 @@ app.get('/tasks/next', asyncRoute(async (_req, res) => {
   const { startISO, endISO } = getDates(page);
 
   // Duration: prefer Time Estimate; else compute from end-start; else default 25
-  let lengthMin = 25;
-  const n = page.properties?.[LENGTH_PROP]?.number;
-  if (typeof n === 'number') {
-    lengthMin = Math.round(n * 60); //If DB stores minutes, change to Math.round(n)
-  } else if (startISO && endISO) {
-    lengthMin = Math.max(1, Math.round((new Date(endISO) - new Date(startISO)) / 60000));
-  }
+let lengthMin = 25;
+
+// 1) number-type property (if you still have one)
+const numVal = page.properties?.[LENGTH_PROP]?.number;
+if (typeof numVal === "number") {
+  // interpret as minutes (change to *60 if you store hours)
+  lengthMin = Math.max(1, Math.round(numVal));
+}
+
+// 2) select / multi_select label with emoji, e.g. "🕐 1h" or "45m"
+const selName =
+  page.properties?.[LENGTH_PROP]?.select?.name ||
+  page.properties?.[LENGTH_PROP]?.multi_select?.[0]?.name ||
+  null;
+const parsed = parseDurationLabelToMinutes(selName);
+if (parsed != null) {
+  lengthMin = parsed;
+}
 
   // If Notion has no end, synthesize one from start + length
   const plannedEndISO =
